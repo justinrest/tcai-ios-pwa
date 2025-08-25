@@ -1,0 +1,145 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "0338D5E2",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6745410850",
+    "_developerTeamID" : "29KV5RGKLM",
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 768756505.95562804,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Subscription Status"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Transaction"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Manage Subscriptions Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Refund Request Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Offer Code Redeem Sheet"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21684142",
+      "localizations" : [
+
+      ],
+      "name" : "All",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "29.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6745741896",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Monthly Plan",
+              "displayName" : "Monthly Unlimited Access",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "ai.caribbeans.chat.monthly.recurring.1",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Monthly Unlimited Access",
+          "subscriptionGroupID" : "21684142",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "129.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "6745743592",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Yearly Plan",
+              "displayName" : "Yearly Unlimited Access",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "ai.caribbeans.chat.yearly.recurring.1",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Yearly Unlimited Access",
+          "subscriptionGroupID" : "21684142",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
