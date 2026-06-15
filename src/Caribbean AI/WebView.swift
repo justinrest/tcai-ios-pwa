@@ -18,6 +18,7 @@ func createWebView(container: UIView, WKSMH: WKScriptMessageHandler, WKND: WKNav
     userContentController.add(WKSMH, name: "iap-purchase-request")
     userContentController.add(WKSMH, name: "iap-transactions-request")
     userContentController.add(WKSMH, name: "iap-set-uuid-request")
+    userContentController.add(WKSMH, name: "haptic")
 
     config.userContentController = userContentController
 

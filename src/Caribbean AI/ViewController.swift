@@ -3,7 +3,7 @@ import WebKit
 import AuthenticationServices
 var webView: WKWebView! = nil
 
-class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding, UIDocumentInteractionControllerDelegate {
+class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding, UIDocumentInteractionControllerDelegate, UIScrollViewDelegate {
     var webView: WKWebView!
     var webAuthSession: ASWebAuthenticationSession?
 
@@ -24,6 +24,7 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKSc
     
     var htmlIsLoaded = false;
     var storeKitAPI: StoreKitAPI!
+    var refreshControl: UIRefreshControl?
     
     private var themeObservation: NSKeyValueObservation?
     var currentWebViewTheme: UIUserInterfaceStyle = .unspecified
@@ -71,6 +72,11 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKSc
             refreshControl.addTarget(self, action: #selector(refreshWebView(_:)), for: UIControl.Event.valueChanged)
             CaribbeanAI.webView.scrollView.addSubview(refreshControl)
             CaribbeanAI.webView.scrollView.bounces = true
+            self.refreshControl = refreshControl
+            // Own the scroll-view delegate so we can constrain the outer
+            // (whole-page) scroll to a top-only pull — see the
+            // UIScrollViewDelegate methods below.
+            CaribbeanAI.webView.scrollView.delegate = self
         }
 
         if #available(iOS 15.0, *), adaptiveUIStyle {
@@ -84,6 +90,36 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKSc
     @objc func refreshWebView(_ sender: UIRefreshControl) {
         CaribbeanAI.webView?.reload()
         sender.endRefreshing()
+    }
+
+    // MARK: - Scroll constraints (pull-to-refresh only)
+    //
+    // The web app owns its own scrolling (fixed chrome + inner scroll areas),
+    // so the outer WKWebView scroll view should never move the whole document —
+    // its ONLY job is the pull-down-from-the-top gesture that drives
+    // pull-to-refresh. Left unconstrained, `bounces = true` lets the page
+    // rubber-band in both directions, and after a partial pull the outer scroll
+    // view keeps owning the gesture while it settles, which is the "stuck for a
+    // few seconds where nothing inside scrolls" state.
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // Allow the rubber-band only while at/above the top (negative offset =
+        // an active pull-down). Once scrolled into content, kill bouncing so
+        // there's no bottom bounce and no floating the whole page around.
+        scrollView.bounces = scrollView.contentOffset.y <= 0
+    }
+
+    func scrollViewDidEndDragging(
+        _ scrollView: UIScrollView, willDecelerate decelerate: Bool
+    ) {
+        // Finger lifted. If this pull didn't commit a refresh, snap straight
+        // back to the top instead of letting it slowly rubber-band — that
+        // hands the gesture back to the page's inner scroll areas immediately
+        // rather than after a multi-second settle.
+        guard !(refreshControl?.isRefreshing ?? false) else { return }
+        if scrollView.contentOffset.y < 0 {
+            scrollView.setContentOffset(.zero, animated: false)
+        }
     }
 
     func createToolbarView() -> UIToolbar{
@@ -248,6 +284,8 @@ extension ViewController {
                 handlePushState()
             case "push-token":
                 handleFCMToken()
+            case "haptic":
+                handleHapticFeedback(message: message)
             case "iap-products-request":
                 Task {
                     do {
