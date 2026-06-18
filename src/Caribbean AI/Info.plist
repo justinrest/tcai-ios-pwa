@@ -90,6 +90,11 @@
 			<string>https://caribbeans.ai/chat?state=account</string>
 		</dict>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>LibreBaskerville-Regular.ttf</string>
+		<string>LibreBaskerville-Bold.ttf</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array/>
 	<key>UILaunchStoryboardName</key>

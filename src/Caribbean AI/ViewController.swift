@@ -28,6 +28,28 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKSc
     
     private var themeObservation: NSKeyValueObservation?
     var currentWebViewTheme: UIUserInterfaceStyle = .unspecified
+
+    // Branded startup screen (logo + Libre Baskerville wordmark + spinner),
+    // mirroring the Android app. Shown until the first page load completes.
+    private var brandedSplash: UIView?
+
+    // Persisted last-session theme key. Startup defaults to DARK and only uses
+    // light when the user's previous session resolved to light — same rule as
+    // the Android app (see tcaiandroid App.onCreate).
+    private static let themeDefaultsKey = "ui_theme"
+
+    // Splash colours mirror the web app's CSS tokens (and the Android splash):
+    //   dark  bg #1C1C1C / fg #EDEDED   ·   light bg #FAFAFA / fg #1F1F1F
+    private static let splashBackgroundColor = UIColor { tc in
+        tc.userInterfaceStyle == .dark
+            ? UIColor(red: 0x1C / 255.0, green: 0x1C / 255.0, blue: 0x1C / 255.0, alpha: 1)
+            : UIColor(red: 0xFA / 255.0, green: 0xFA / 255.0, blue: 0xFA / 255.0, alpha: 1)
+    }
+    private static let splashForegroundColor = UIColor { tc in
+        tc.userInterfaceStyle == .dark
+            ? UIColor(red: 0xED / 255.0, green: 0xED / 255.0, blue: 0xED / 255.0, alpha: 1)
+            : UIColor(red: 0x1F / 255.0, green: 0x1F / 255.0, blue: 0x1F / 255.0, alpha: 1)
+    }
     override var preferredStatusBarStyle : UIStatusBarStyle {
         if #available(iOS 13, *), overrideStatusBar{
             if #available(iOS 15, *) {
@@ -41,13 +63,102 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKSc
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        applyInitialTheme()
         initWebView()
         initToolbarView()
         loadRootUrl()
+        setupBrandedSplash()
         storeKitAPI = StoreKitAPI.init()
-        
+
         NotificationCenter.default.addObserver(self, selector: #selector(self.keyboardWillHide(_:)), name: UIResponder.keyboardWillHideNotification , object: nil)
-        
+
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // The window exists by now — assert the saved (default-dark) theme before
+        // the web content paints, so the whole shell starts in the right theme.
+        applyInitialTheme()
+    }
+
+    // MARK: - Branded startup screen + theme rules
+
+    private func savedInterfaceStyle() -> UIUserInterfaceStyle {
+        UserDefaults.standard.string(forKey: Self.themeDefaultsKey) == "light" ? .light : .dark
+    }
+
+    private func persistTheme(_ style: UIUserInterfaceStyle) {
+        guard style != .unspecified else { return }
+        UserDefaults.standard.set(style == .light ? "light" : "dark", forKey: Self.themeDefaultsKey)
+    }
+
+    private func keyWindow() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .flatMap { ($0 as? UIWindowScene)?.windows ?? [] }
+            .first { $0.isKeyWindow }
+    }
+
+    // Default to dark (or the last-session theme) before the page loads, so the
+    // WebView and chrome start in that theme. adaptiveUIStyle takes over once the
+    // page reports its own background colour (see initWebView).
+    private func applyInitialTheme() {
+        if #available(iOS 15.0, *), adaptiveUIStyle {
+            keyWindow()?.overrideUserInterfaceStyle = savedInterfaceStyle()
+        }
+    }
+
+    private func setupBrandedSplash() {
+        let overlay = UIView()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        // The splash always follows the saved/default theme regardless of device.
+        overlay.overrideUserInterfaceStyle = savedInterfaceStyle()
+        overlay.backgroundColor = Self.splashBackgroundColor
+
+        let logo = UIImageView(image: UIImage(named: "CAILogo") ?? UIImage(named: "LaunchIcon"))
+        logo.contentMode = .scaleAspectFit
+        logo.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = UILabel()
+        label.text = "Caribbean AI"
+        label.textColor = Self.splashForegroundColor
+        label.font = UIFont(name: "LibreBaskerville-Bold", size: 26)
+            ?? UIFont(name: "Baskerville-Bold", size: 26)
+            ?? .boldSystemFont(ofSize: 26)
+
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.color = Self.splashForegroundColor
+        spinner.startAnimating()
+
+        let stack = UIStackView(arrangedSubviews: [logo, label, spinner])
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.setCustomSpacing(20, after: logo)
+        stack.setCustomSpacing(28, after: label)
+
+        overlay.addSubview(stack)
+        view.addSubview(overlay)
+
+        NSLayoutConstraint.activate([
+            overlay.topAnchor.constraint(equalTo: view.topAnchor),
+            overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            logo.widthAnchor.constraint(equalToConstant: 120),
+            logo.heightAnchor.constraint(equalToConstant: 120),
+            stack.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: overlay.centerYAnchor),
+        ])
+
+        brandedSplash = overlay
+    }
+
+    private func hideBrandedSplash() {
+        guard let overlay = brandedSplash else { return }
+        brandedSplash = nil
+        UIView.animate(withDuration: 0.25, animations: { overlay.alpha = 0 }) { _ in
+            overlay.removeFromSuperview()
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -82,6 +193,7 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKSc
         if #available(iOS 15.0, *), adaptiveUIStyle {
             themeObservation = CaribbeanAI.webView.observe(\.underPageBackgroundColor) { [unowned self] webView, _ in
                 currentWebViewTheme = CaribbeanAI.webView.underPageBackgroundColor.isLight() ?? true ? .light : .dark
+                self.persistTheme(currentWebViewTheme)
                 self.overrideUIStyle()
             }
         }
@@ -178,10 +290,11 @@ class ViewController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKSc
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             CaribbeanAI.webView.isHidden = false
             self.loadingView.isHidden = true
-           
+
             self.setProgress(0.0, false)
-            
+
             self.overrideUIStyle()
+            self.hideBrandedSplash()
         }
     }
     

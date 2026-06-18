@@ -27,30 +27,43 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             SceneDelegate.shortcutLinkToLaunch = URL.init(string: shortcutUrl)
         }
         
-        // See if we were launched via scheme URL
+        // See if we were launched via scheme URL (e.g. caribbeansai://chat#access_token=...)
         if let schemeUrl = connectionOptions.urlContexts.first?.url {
-            // Convert scheme://url to a https://url
-            var comps = URLComponents(url: schemeUrl, resolvingAgainstBaseURL: false)
-            comps?.scheme = "https"
-            
-            if let url = comps?.url {
-                SceneDelegate.universalLinkToLaunch = url;
+            if let url = SceneDelegate.convertSchemeUrl(schemeUrl) {
+                SceneDelegate.universalLinkToLaunch = url
             }
         }
     }
     
     // This function is called when our app is already running and the user clicks a custom scheme URL
     func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
-        if let scheme = URLContexts.first?.url {
-            // Convert scheme://url to a https://url and navigate to it
-            var comps = URLComponents(url: scheme, resolvingAgainstBaseURL: false)
-            comps?.scheme = "https"
-
-            if let url = comps?.url {
-                // Handle it inside our web view in a SPA-friendly way.
+        if let schemeUrl = URLContexts.first?.url {
+            if let url = SceneDelegate.convertSchemeUrl(schemeUrl) {
                 CaribbeanAI.webView.evaluateJavaScript("location.href = '\(url)'")
             }
         }
+    }
+
+    // Converts caribbeansai://chat#fragment or caribbeansai:///auth/callback?code=...
+    // to the correct https://caribbeans.ai/... equivalent.
+    // URLComponents alone produces the wrong URL because the "host" in caribbeansai://chat
+    // is "chat" (a path segment), not a real domain.
+    static func convertSchemeUrl(_ url: URL) -> URL? {
+        var comps = URLComponents()
+        comps.scheme = "https"
+        comps.host = "caribbeans.ai"
+        comps.query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.query
+        comps.fragment = url.fragment
+
+        // In caribbeansai://chat the URL host is "chat" (a path word, not a domain).
+        // In caribbeansai:///auth/callback the host is empty and the path is /auth/callback.
+        if let host = url.host, !host.isEmpty {
+            comps.path = "/" + host + url.path
+        } else {
+            comps.path = url.path.isEmpty ? "/chat" : url.path
+        }
+
+        return comps.url
     }
 
     // This function is called when our app is already running and the user clicks a universal link.

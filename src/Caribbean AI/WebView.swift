@@ -116,26 +116,91 @@ extension ViewController: WKDownloadDelegate {
     
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
 
-        // Check if the navigation is requesting a new window/tab
-        // (often indicated by targetFrame being nil for target="_blank" or window.open)
         if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
-            print("Target requires new window for URL: \(url.absoluteString). Opening externally.")
+            // Google OAuth opens accounts.youtube.com/accounts/SetSID (and similar) as a
+            // popup for cookie syncing. These are a side-effect of the OAuth flow and must
+            // NOT be sent to Safari — doing so breaks the flow and shows the user a random URL.
+            let googleAccountHosts = ["accounts.google.com", "accounts.youtube.com", "accounts.googlevideo.com"]
+            if let host = url.host, googleAccountHosts.contains(where: { host == $0 || host.hasSuffix("." + $0) }) {
+                print("Silently ignoring Google OAuth popup: \(url.absoluteString)")
+                return nil
+            }
 
-            // Check if the application can open the URL scheme (http, https, etc.)
-            if UIApplication.shared.canOpenURL(url) {   
-                // Open the URL in the default external browser
+            print("Target requires new window for URL: \(url.absoluteString). Opening externally.")
+            if UIApplication.shared.canOpenURL(url) {
                 UIApplication.shared.open(url, options: [:], completionHandler: nil)
             } else {
                 print("Cannot open URL externally: \(url.absoluteString)")
-                // Handle cases where the URL can't be opened (e.g., custom schemes not configured)
             }
         }
 
-        // Return nil because we are handling the new window request externally
-        // and don't want WKWebView to create a new internal web view.
         return nil
     }
 
+
+    // Custom URL scheme Supabase redirects to when signing in inside the native app.
+    // NOTE: ASWebAuthenticationSession matches this internally and does NOT require it to
+    // be registered in Info.plist. The frontend must set redirectTo to "caribbeansai://chat"
+    // for every provider it wants handled natively (see app/(auth)/login/page.tsx).
+    static let oauthCallbackScheme = "caribbeansai"
+
+    // Runs an OAuth authorize URL in a trusted ASWebAuthenticationSession and routes the
+    // caribbeansai:// callback back into the main webview so the web app can finish the session.
+    private func startAuthSession(authorizeUrl: URL) {
+        let session = ASWebAuthenticationSession(
+            url: authorizeUrl,
+            callbackURLScheme: Self.oauthCallbackScheme
+        ) { [weak self] callbackURL, error in
+            guard let self = self else { return }
+            self.webAuthSession = nil
+
+            if let error = error {
+                if let authError = error as? ASWebAuthenticationSessionError,
+                   authError.code == .canceledLogin {
+                    print("User canceled sign-in")
+                    return
+                }
+                print("❌ ASWebAuthenticationSession error: \(error)")
+                DispatchQueue.main.async {
+                    CaribbeanAI.webView?.load(URLRequest(url: URL(string: "https://caribbeans.ai/login")!))
+                }
+                return
+            }
+
+            guard let callbackURL = callbackURL else { return }
+            print("✅ OAuth callback: \(callbackURL)")
+            DispatchQueue.main.async { self.loadAuthCallback(callbackURL) }
+        }
+        session.presentationContextProvider = self
+        session.prefersEphemeralWebBrowserSession = false
+        self.webAuthSession = session
+        session.start()
+    }
+
+    // Maps caribbeansai://<path>[?query][#fragment] onto its https://caribbeans.ai equivalent
+    // and loads it. Handles both Supabase flows: implicit (#access_token=...) and PKCE
+    // (?code=...). Tokens are concatenated verbatim so nothing gets re-encoded.
+    private func loadAuthCallback(_ callbackURL: URL) {
+        guard let webView = CaribbeanAI.webView else { return }
+
+        // In caribbeansai://chat the URL "host" is actually a path word ("chat"); in
+        // caribbeansai:///auth/callback the host is empty and the path carries everything.
+        let host = callbackURL.host.flatMap { $0.isEmpty ? nil : $0 }
+        var path = (host.map { "/" + $0 } ?? "") + callbackURL.path
+        if path.isEmpty { path = "/chat" }
+
+        var targetString = "https://caribbeans.ai" + path
+        if let query = callbackURL.query, !query.isEmpty {
+            targetString += "?" + query
+        }
+        if let fragment = callbackURL.fragment, !fragment.isEmpty {
+            targetString += "#" + fragment
+        }
+
+        let target = URL(string: targetString) ?? URL(string: "https://caribbeans.ai/chat")!
+        print("   -> Loading \(target)")
+        webView.load(URLRequest(url: target))
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let requestUrl = navigationAction.request.url else {
@@ -146,108 +211,46 @@ extension ViewController: WKDownloadDelegate {
         let requestUrlString = requestUrl.absoluteString.lowercased()
         print("➡️ Navigating to: \(requestUrlString) | Type: \(navigationAction.navigationType.rawValue)")
 
-        // --- Check for Apple Sign-in Initiation ---
-        // Adjust the host and path check if your specific Apple auth trigger URL is different
-        if requestUrl.host == "auth.caribbeans.ai" && requestUrl.path.contains("/authorize") && requestUrl.query?.contains("provider=apple") ?? false {
+        // --- OAuth via ASWebAuthenticationSession (Google, Apple, Microsoft) ---
+        //
+        // Supabase OAuth must run in a trusted browser context, not a raw WKWebView:
+        // Google and Microsoft reject embedded webviews ("disallowed_useragent"), and
+        // the Google flow spawns cookie-sync popups (accounts.youtube.com/SetSID) that
+        // would otherwise leak to Safari and break the flow. ASWebAuthenticationSession
+        // runs the whole flow in a SafariViewController-grade context and returns via the
+        // caribbeansai:// callback scheme.
+        //
+        // We intercept ANY OAuth authorize navigation and FORCE redirect_to onto the native
+        // callback scheme ourselves. This makes the app self-sufficient: Google/Microsoft
+        // sign-in works even when the deployed frontend still points OAuth at an https
+        // redirect_to (which would otherwise run the whole flow — including the
+        // accounts.youtube.com/SetSID popup — inside this WKWebView and dead-end on a white
+        // screen). Only OAuth uses /authorize; email/password use /token, so this is safe.
+        // "caribbeansai://chat" must be in Supabase's Redirect URLs allowlist (it already is,
+        // since Apple sign-in uses it).
+        if requestUrl.host == "auth.caribbeans.ai", requestUrl.path.contains("/authorize") {
 
-            print(" intercepted Apple Sign-in URL: \(requestUrlString)")
-
-            // Define your callback URL scheme (must be unique and declared in Info.plist)
-            // Example: "yourappscheme"
-            let callbackUrlScheme = "caribbeansai" // <-- IMPORTANT: Replace with your actual scheme
-
-            // Cancel the navigation in WKWebView
+            print("🔑 Intercepting OAuth via ASWebAuthenticationSession: \(requestUrlString)")
             decisionHandler(.cancel)
 
-            // Start the ASWebAuthenticationSession
-            self.webAuthSession = ASWebAuthenticationSession(url: requestUrl, callbackURLScheme: callbackUrlScheme) { callbackURL, error in
-                // --- Handle the callback ---
-                if let error = error {
-                    print("❌ ASWebAuthenticationSession Error: \(error)")
-                    // Handle error appropriately - maybe show an alert or reload the login page
-                    // Example: Reload the original page or show error state
-                    // DispatchQueue.main.async {
-                    //     self.webView.reload()
-                    // }
-                    if let authError = error as? ASWebAuthenticationSessionError, authError.code == .canceledLogin {
-                        print("User canceled Apple Sign-in")
-                        // No need to reload page usually if user explicitly canceled
-                    } else {
-                         // Handle other errors (network, etc.)
-                         // Maybe reload the login page or show an error message
-                        DispatchQueue.main.async {
-                           let originalLoginURL = URL(string: "https://caribbeans.ai/login")! // Or your specific login page URL
-                           self.webView.load(URLRequest(url: originalLoginURL))
-                        }
-                    }
+            var comps = URLComponents(url: requestUrl, resolvingAgainstBaseURL: false)
+            var items = comps?.queryItems ?? []
+            items.removeAll { $0.name == "redirect_to" }
+            items.append(URLQueryItem(name: "redirect_to", value: "\(Self.oauthCallbackScheme)://chat"))
+            comps?.queryItems = items
 
-                    // Inside the ASWebAuthenticationSession completion handler...
-                    } else if let successUrl = callbackURL {
-                        print("✅ ASWebAuthenticationSession Success URL: \(successUrl)")
+            startAuthSession(authorizeUrl: comps?.url ?? requestUrl)
+            return
+        }
 
-                        DispatchQueue.main.async {
-                            // Safely unwrap the webView BEFORE trying to use it
-                            guard let webView = CaribbeanAI.webView else {
-                                print("❌ CaribbeanAI.webView is nil when trying to navigate.")
-                                self.webAuthSession = nil // Clear session ref
-                                return
-                            }
-
-                            // --- Construct the target HTTPS URL ---
-
-                            // 1. Get the fragment (the part after # with the tokens)
-                            guard let fragment = successUrl.fragment else {
-                                print("❌ Could not get fragment from successURL: \(successUrl)")
-                                // Optionally load login page on error
-                                let loginUrl = URL(string: "https://caribbeans.ai/login")! // Adjust if needed
-                                webView.load(URLRequest(url: loginUrl))
-                                self.webAuthSession = nil // Clear session ref
-                                return
-                            }
-
-                            // 2. Determine the target path. Usually, it's the path from your custom scheme URL.
-                            //    For caribbeansai://chat, the path is effectively "/chat".
-                            //    If the path could be different, parse it from `successUrl.path`
-                            let targetPath = "/chat" // Assuming it's always /chat based on your scheme URL
-
-                            // 3. Construct the final HTTPS URL string
-                            //    Replace "caribbeansai://" with your actual web domain "https://caribbeans.ai"
-                            let targetBaseUrl = "https://caribbeans.ai" // Make sure this is your correct web app domain
-                            let targetUrlString = "\(targetBaseUrl)\(targetPath)#\(fragment)"
-
-                            // 4. Create a URL object
-                            guard let targetUrl = URL(string: targetUrlString) else {
-                                print("❌ Could not create target HTTPS URL object from string: \(targetUrlString)")
-                                // Optionally load login page on error
-                                let loginUrl = URL(string: "https://caribbeans.ai/login")! // Adjust if needed
-                                webView.load(URLRequest(url: loginUrl))
-                                self.webAuthSession = nil // Clear session ref
-                                return
-                            }
-
-                            // 5. Load the constructed HTTPS URL in the main WebView
-                            print("   -> Navigating WKWebView to HTTPS URL with fragment: \(targetUrl)")
-                            webView.load(URLRequest(url: targetUrl))
-
-                            // --- End of modification ---
-
-                            self.webAuthSession = nil // Clear session ref after handling
-                        }
-                    }
-                    // ... rest of the completion handler ...
-            }
-
-            // Set the presentation context provider (required for iOS 13+)
-            self.webAuthSession?.presentationContextProvider = self
-
-            // Start the session
-            self.webAuthSession?.start()
-
-            return // Stop further processing in decidePolicyFor
+        // --- Safety net: any caribbeansai:// redirect that reaches the webview directly ---
+        if requestUrl.scheme == Self.oauthCallbackScheme {
+            decisionHandler(.cancel)
+            DispatchQueue.main.async { self.loadAuthCallback(requestUrl) }
+            return
         }
 
         // --- Existing logic for about:blank, downloads, internal/external checks ---
-        // (Keep your existing logic below this point for other navigation types)
 
         // Allow about:blank immediately
         if requestUrl.scheme == "about" {
